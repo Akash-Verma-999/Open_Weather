@@ -1,14 +1,13 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List
-from sqlalchemy.orm import Session
 import requests
-
+from sqlalchemy.orm import Session
+from database import get_db
 from database import SessionLocal
 import models
 
 app = FastAPI()
-
 def get_db():
     db = SessionLocal()
     try:
@@ -17,15 +16,23 @@ def get_db():
         db.close()
 
 @app.delete("/city")
-def delete_city(city_name:str, db: Session = Depends(get_db)):
-    city_name = city_name.lower()
-    city_data = db.query(models.city).filter(models.city.name==city_name).first()
-    if city_data is None:
+def delete_city(city_name: str, db: Session = Depends(get_db)):
+    city = db.query(models.city).filter(models.city.name.ilike(city_name)).first()
+
+    if not city:
         raise HTTPException(status_code=404, detail="City not found")
 
-    db.delete(city_data)
+    # Delete related records first
+    db.query(models.weather).filter(models.weather.city_id == city.city_id).delete()
+    db.query(models.weather_info).filter(models.weather_info.city_id == city.city_id).delete()
+    db.query(models.wind_info).filter(models.wind_info.city_id == city.city_id).delete()
+
+    # Now safe to delete the city
+    db.delete(city)
     db.commit()
-    return {"message":"Deleted Successfully"}
+
+    return {"message": f"City '{city.name}' and related data deleted successfully"}
+
 # this is to get a particular city using city_id
 # @app.get("/cities/{city_id}")
 # def get_city(city_id:str,db:Session=Depends(get_db)):
@@ -42,43 +49,48 @@ def delete_city(city_name:str, db: Session = Depends(get_db)):
 #     return response_data
 
 # this is for getting all the cities
+
+
 @app.get("/cities")
-def get_city( db: Session = Depends(get_db)):
-    import pdb; pdb.set_trace()
-    city_data=db.query(models.city).filter()
-    if  not city_data :
-        raise HTTPException(status_code=404, detail="City not found")
-    response_Data=[]
+def get_city(db: Session = Depends(get_db)):
+    city_data = db.query(models.city).all()
+    if not city_data:
+        raise HTTPException(status_code=404, detail="No cities found")
+
+    response_data = []
+
     for data in city_data:
         weather = db.query(models.weather).filter(models.weather.city_id == data.city_id).first()
-        weather_info = db.query(models.weather_info).filter(models.weather_info.x   ==data.city_id).first()
+        weather_info = db.query(models.weather_info).filter(models.weather_info.city_id == data.city_id).first()
         wind_info = db.query(models.wind_info).filter(models.wind_info.city_id == data.city_id).first()
 
         cur_data = {
             "id": data.city_id,
-            "name":data.name,
-            "long":data.long,
-            "lat":data.lat,
-            "country":data.country,
+            "name": data.name,
+            "long": data.long,
+            "lat": data.lat,
+            "country": data.country,
             "weather": {
-                "weather_id":weather.weather_id,
-                "main":weather.main,
-                "description":weather.description
+                "weather_id": weather.weather_id if weather else None,
+                "main": weather.main if weather else None,
+                "description": weather.description if weather else None
             },
-            "weather_info":{
-                    "temp":weather_info.temp,
-                    "feels_like":weather_info.feels_like,
-                    "temp_min":weather_info.temp_min,
-                    "temp_max":weather_info.temp_max,
-                    "humidity":weather_info.humidity
+            "weather_info": {
+                "temp": weather_info.temp if weather_info else None,
+                "feels_like": weather_info.feels_like if weather_info else None,
+                "temp_min": weather_info.temp_min if weather_info else None,
+                "temp_max": weather_info.temp_max if weather_info else None,
+                "humidity": weather_info.humidity if weather_info else None
             },
-            "wind_info":{
-                "speed":wind_info.speed,
-                "gust":wind_info.gust
+            "wind_info": {
+                "speed": wind_info.speed if wind_info else None,
+                "gust": wind_info.gust if wind_info else None
             }
         }
-        response_Data.append(cur_data)
-    return response_Data
+
+        response_data.append(cur_data)
+
+    return response_data
 
 
 @app.post("/sync-weather")
